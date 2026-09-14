@@ -1,0 +1,17 @@
+{
+  "scripts": {
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.21",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.2.1",
+    "mysql2": "^3.17.0",
+    "pino": "^10.3.0",
+    "qrcode": "^1.5.4",
+    "qrcode-terminal": "^0.12.0",
+    "socket.io": "^4.8.3",
+    "winston": "^3.19.0"
+  },
+  "type": "module"
+}

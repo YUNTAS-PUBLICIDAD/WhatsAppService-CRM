@@ -1,0 +1,10 @@
+.wwebjs_cache
+auth_info
+logs
+*.log
+node_modules
+.env
+.git
+.gitignore
+README.md
+src/.wwebjs_cache
