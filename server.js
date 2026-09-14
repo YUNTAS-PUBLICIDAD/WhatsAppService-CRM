@@ -30,9 +30,6 @@ app.get('/api/whatsapp/status', whatsappController.getStatus);
 // se solicita un nuevo QR
 app.post('/api/whatsapp/request-qr', generalLimiter, whatsappController.requestQR);
 
-// se envia un mensaje con imagen
-app.post('/api/whatsapp/send-product-info', sendImageLimiter, whatsappController.sendProductInfo);
-
 // se reinicia la sesion de whatsapp
 app.post('/api/whatsapp/reset', generalLimiter, whatsappController.resetSession);
 
