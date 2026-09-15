@@ -349,27 +349,18 @@ class WhatsAppService {
 
     /**
      * Obtiene el JID correcto para enviar un mensaje.
-     * Si el input es un número telefónico, lo valida.
-     * Si es un LID, intenta resolverlo a número real. Si no puede, usa el LID directamente (Baileys lo permite).
+     * Si el input es un LID (@lid), lo usa directamente (conserva la sesión LID).
      * Si es un JID @s.whatsapp.net, lo valida y retorna.
+     * Si es solo dígitos, lo trata como número telefónico.
      */
     async getJidForSending(phoneOrLid) {
         if (!this.isReady || !this.sock) {
             throw new Error('WhatsApp no está conectado');
         }
 
-        // Si es un LID (@lid), intentar resolver a número real
+        // Si es un LID (@lid), enviar directamente al LID para mantener sesión consistente
         if (this.isLid(phoneOrLid)) {
-            const phone = await this.resolveLidToPhone(phoneOrLid);
-            if (phone) {
-                const jid = await this.validateNumber(`${phone}@s.whatsapp.net`);
-                if (jid) {
-                    logger.info('LID resuelto a número para envío', { lid: phoneOrLid, phone, jid });
-                    return jid;
-                }
-            }
-            // Fallback: usar el LID directamente (Baileys puede enviar a LIDs)
-            logger.warn('No se pudo resolver LID a número real, usando LID directamente', { lid: phoneOrLid });
+            logger.info('Usando LID directamente para envío', { lid: phoneOrLid });
             return phoneOrLid;
         }
 
