@@ -24,6 +24,9 @@ class WhatsAppService {
         this.webhookUrl = null;
         this.receivedMessages = [];
         this.maxStoredMessages = 100;
+        // Mapa en memoria para resolver LIDs a números de teléfono reales
+        // Se pobla cuando se descubre la relación (ej: al recibir mensajes de números conocidos)
+        this.lidToPhoneMap = new Map();
     }
 
     /**
@@ -267,6 +270,116 @@ class WhatsAppService {
     }
 
     /**
+     * Verifica si un JID es un LID (Linked Identity)
+     */
+    isLid(jid) {
+        return jid && jid.endsWith('@lid');
+    }
+
+    /**
+     * Extrae el identificador base de un JID (antes del @)
+     */
+    extractJidBase(jid) {
+        if (!jid) return '';
+        return jid.split('@')[0];
+    }
+
+    /**
+     * Resuelve un LID a un número de teléfono real usando el store de Baileys.
+     * Si no se puede resolver, retorna null.
+     */
+    async resolveLidToPhone(lid) {
+        if (!this.isReady || !this.sock) {
+            return null;
+        }
+
+        // Primero verificar el mapa en memoria
+        const lidBase = this.extractJidBase(lid);
+        if (this.lidToPhoneMap.has(lidBase)) {
+            return this.lidToPhoneMap.get(lidBase);
+        }
+
+        // Intentar resolver usando el store de contactos de Baileys
+        try {
+            const store = this.sock.store;
+            const contacts = store?.contacts || {};
+            const contactKeys = Object.keys(contacts);
+
+            logger.info('Intentando resolver LID desde store', {
+                lid,
+                lidBase,
+                storeExists: !!store,
+                storeKeys: store ? Object.keys(store).join(', ') : 'none',
+                contactsInStore: contactKeys.length
+            });
+
+            // Log de los primeros contactos del store para diagnosticar
+            if (contactKeys.length > 0) {
+                const sampleKeys = contactKeys.slice(0, 3);
+                for (const key of sampleKeys) {
+                    const c = contacts[key];
+                    logger.info('Contacto en store', {
+                        key,
+                        jid: c.jid,
+                        lid: c.lid,
+                        name: c.name || c.notify,
+                        hasLid: !!c.lid,
+                        allKeys: Object.keys(c).join(', ')
+                    });
+                }
+            }
+            
+            // Buscar en los contactos por si hay una referencia cruzada
+            for (const [jid, contact] of Object.entries(contacts)) {
+                if (contact.lid === lidBase || jid.includes(lidBase)) {
+                    const phone = this.extractJidBase(jid);
+                    if (phone && !phone.includes('@')) {
+                        this.lidToPhoneMap.set(lidBase, phone);
+                        logger.info('LID resuelto a número desde store', { lid, phone });
+                        return phone;
+                    }
+                }
+            }
+        } catch (error) {
+            logger.warn('Error al resolver LID desde store', { error: error.message, lid });
+        }
+
+        return null;
+    }
+
+    /**
+     * Obtiene el JID correcto para enviar un mensaje.
+     * Si el input es un LID (@lid), lo usa directamente (conserva la sesión LID).
+     * Si es un JID @s.whatsapp.net, lo valida y retorna.
+     * Si es solo dígitos, lo trata como número telefónico.
+     */
+    async getJidForSending(phoneOrLid) {
+        if (!this.isReady || !this.sock) {
+            throw new Error('WhatsApp no está conectado');
+        }
+
+        // Si es un LID (@lid), enviar directamente al LID para mantener sesión consistente
+        if (this.isLid(phoneOrLid)) {
+            logger.info('Usando LID directamente para envío', { lid: phoneOrLid });
+            return phoneOrLid;
+        }
+
+        // Si es un JID @s.whatsapp.net, validar que exista
+        if (phoneOrLid.includes('@s.whatsapp.net')) {
+            const jid = await this.validateNumber(phoneOrLid);
+            if (jid) return jid;
+            return null;
+        }
+
+        // Es solo dígitos: número telefónico
+        const numberId = phoneOrLid.replace(/\D/g, '');
+        const jid = await this.validateNumber(`${numberId}@s.whatsapp.net`);
+        if (jid) return jid;
+
+        return null;
+    }
+
+    /**
      * Maneja mensajes entrantes de WhatsApp
      */
     async handleIncomingMessages(messageUpdate) {
@@ -283,21 +396,62 @@ class WhatsAppService {
             if (msg.key.remoteJid.includes('@g.us')) continue;
 
             try {
+                const remoteJid = msg.key.remoteJid;
+                const isLid = this.isLid(remoteJid);
+                const jidBase = this.extractJidBase(remoteJid);
+
+                // Log detallado del mensaje entrante para diagnosticar LIDs
+                logger.info('Mensaje entrante raw', {
+                    remoteJid,
+                    isLid,
+                    jidBase,
+                    fromMe: msg.key.fromMe,
+                    participant: msg.key.participant,
+                    pushName: msg.pushName,
+                    senderPn: msg.key.senderPn || null,
+                    senderLid: msg.key.senderLid || null,
+                    messageKeys: msg.message ? Object.keys(msg.message).join(', ') : 'none',
+                    keyKeys: Object.keys(msg.key).join(', ')
+                });
+
+                // Si es un LID, intentar resolver el número real para enviar al CRM
+                let resolvedPhone = null;
+                if (isLid) {
+                    // Intentar obtener el teléfono desde senderPn del key
+                    if (msg.key.senderPn) {
+                        const phone = msg.key.senderPn.replace(/\D/g, '');
+                        if (phone) {
+                            this.lidToPhoneMap.set(jidBase, phone);
+                            logger.info('LID mapeado desde senderPn del mensaje entrante', { lid: remoteJid, phone, senderPn: msg.key.senderPn });
+                            resolvedPhone = phone;
+                        }
+                    }
+                    if (!resolvedPhone) {
+                        resolvedPhone = await this.resolveLidToPhone(remoteJid);
+                    }
+                }
+
                 const messageData = {
                     messageId: msg.key.id,
-                    from: msg.key.remoteJid,
+                    from: remoteJid,
                     fromName: msg.pushName || 'Desconocido',
                     timestamp: msg.messageTimestamp,
                     text: this.extractMessageText(msg.message),
                     hasMedia: this.hasMedia(msg.message),
                     rawMessage: msg.message,
-                    receivedAt: new Date().toISOString()
+                    receivedAt: new Date().toISOString(),
+                    // Campos adicionales para LIDs
+                    isLid,
+                    lidBase: isLid ? jidBase : null,
+                    resolvedPhone
                 };
 
                 logger.info('Mensaje entrante recibido', {
                     from: messageData.from,
                     fromName: messageData.fromName,
-                    text: messageData.text
+                    text: messageData.text,
+                    isLid,
+                    resolvedPhone
                 });
 
                 // Almacenar en memoria
@@ -381,7 +535,14 @@ class WhatsAppService {
         try {
             const result = await this.sock.sendMessage(jid, { text });
 
-            logger.info('Mensaje de texto enviado', { jid });
+            const isLidJid = this.isLid(jid);
+            logger.info('Mensaje de texto enviado', {
+                jid,
+                isLid: isLidJid,
+                messageId: result?.key?.id,
+                timestamp: result?.messageTimestamp,
+                status: result?.status
+            });
             return {
                 success: true,
                 messageId: result.key.id,

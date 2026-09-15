@@ -227,17 +227,25 @@ export async function sendMessage(req, res) {
             });
         }
 
-        // Limpiar número
-        const numberId = phone.replace(/\D/g, '');
-        if (numberId.length < 10 || numberId.length > 15) {
-            return res.status(400).json({
-                success: false,
-                message: 'El formato del número de teléfono no es válido'
-            });
+        // Detectar si es un LID (Linked Identity) o un número telefónico
+        const isLid = phone.includes('@lid');
+        let jid;
+
+        if (isLid) {
+            // Es un LID: pasarlo directamente a getJidForSending
+            jid = await whatsappService.getJidForSending(phone);
+        } else {
+            // Es un número telefónico: limpiar y validar
+            const numberId = phone.replace(/\D/g, '');
+            if (numberId.length < 10 || numberId.length > 15) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'El formato del número de teléfono no es válido'
+                });
+            }
+            jid = await whatsappService.getJidForSending(numberId);
         }
 
-        // Validar número en WhatsApp
-        const jid = await whatsappService.validateNumber(`${numberId}@s.whatsapp.net`);
         if (!jid) {
             return res.status(404).json({
                 success: false,
