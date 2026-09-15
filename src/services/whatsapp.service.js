@@ -27,8 +27,6 @@ class WhatsAppService {
         // Mapa en memoria para resolver LIDs a números de teléfono reales
         // Se pobla cuando se descubre la relación (ej: al recibir mensajes de números conocidos)
         this.lidToPhoneMap = new Map();
-        // Mapeo inverso: número de teléfono → LID
-        this.phoneToLidMap = new Map();
     }
 
     /**
@@ -149,64 +147,6 @@ class WhatsAppService {
                 // Escuchar mensajes entrantes
                 this.sock.ev.on('messages.upsert', async (messageUpdate) => {
                     await this.handleIncomingMessages(messageUpdate);
-                });
-
-                // Poblar mapa LID↔número desde historial de contactos (al conectar)
-                this.sock.ev.on('messaging-history.set', async (history) => {
-                    logger.info('messaging-history.set recibido', {
-                        contactsCount: history.contacts?.length || 0,
-                        chatsCount: history.chats?.length || 0,
-                        messagesCount: history.messages?.length || 0
-                    });
-                    // Log detallado de los primeros contactos para diagnosticar
-                    if (history.contacts?.length > 0) {
-                        const sample = history.contacts.slice(0, 5);
-                        for (const c of sample) {
-                            logger.info('Contacto del historial', {
-                                jid: c.jid,
-                                lid: c.lid,
-                                name: c.name || c.notify,
-                                hasLid: !!c.lid,
-                                keys: Object.keys(c).join(', ')
-                            });
-                        }
-                    }
-                    this.populateLidMapFromContacts(history.contacts);
-                });
-
-                // Actualizar mapa cuando se agregan contactos nuevos
-                this.sock.ev.on('contacts.upsert', async (contacts) => {
-                    logger.info('contacts.upsert', { count: contacts.length });
-                    if (contacts.length > 0) {
-                        const sample = contacts.slice(0, 3);
-                        for (const c of sample) {
-                            logger.info('Contacto upsert', {
-                                jid: c.jid,
-                                lid: c.lid,
-                                name: c.name || c.notify,
-                                hasLid: !!c.lid,
-                                keys: Object.keys(c).join(', ')
-                            });
-                        }
-                    }
-                    this.populateLidMapFromContacts(contacts);
-                });
-
-                // Actualizar mapa cuando se actualizan contactos
-                this.sock.ev.on('contacts.update', async (contacts) => {
-                    logger.info('contacts.update', { count: contacts.length });
-                    this.populateLidMapFromContacts(contacts);
-                });
-
-                // Mapeo directo LID→número cuando WhatsApp comparte el teléfono
-                this.sock.ev.on('chats.phoneNumberShare', async ({ lid, jid }) => {
-                    if (lid && jid) {
-                        const phone = jid.split('@')[0];
-                        const lidBase = lid.split('@')[0] || lid;
-                        this.lidToPhoneMap.set(lidBase, phone);
-                        this.phoneToLidMap.set(phone, lidBase);
-                        logger.info('LID resuelto via phoneNumberShare', { lid, phone });
-                    }
                 });
 
                 return this.sock;
@@ -408,98 +348,36 @@ class WhatsAppService {
     }
 
     /**
-     * Pobla el mapa LID↔número desde una lista de contactos de Baileys.
-     * Los contactos pueden tener campos 'lid' y 'jid' con el mapeo directo.
-     */
-    populateLidMapFromContacts(contacts) {
-        if (!contacts || !Array.isArray(contacts)) {
-            logger.info('populateLidMapFromContacts: contacts es null o no es array');
-            return;
-        }
-
-        let mapped = 0;
-        for (const contact of contacts) {
-            const lid = contact.lid;
-            const jid = contact.jid;
-
-            if (lid && jid && jid.includes('@s.whatsapp.net')) {
-                const phone = jid.split('@')[0];
-                const lidBase = lid.split('@')[0] || lid;
-
-                if (phone && lidBase) {
-                    this.lidToPhoneMap.set(lidBase, phone);
-                    this.phoneToLidMap.set(phone, lidBase);
-                    mapped++;
-                    logger.info('Mapeo LID↔número encontrado', { lid, phone, lidBase });
-                }
-            }
-        }
-
-        logger.info('Mapa LID actualizado', {
-            lidToPhoneEntries: this.lidToPhoneMap.size,
-            phoneToLidEntries: this.phoneToLidMap.size,
-            contactsProcessed: contacts.length,
-            newMappings: mapped
-        });
-    }
-
-    /**
      * Obtiene el JID correcto para enviar un mensaje.
      * Si el input es un número telefónico, lo valida.
-     * Si es un LID, intenta resolverlo a número real usando múltiples fuentes.
+     * Si es un LID, intenta resolverlo a número real. Si no puede, usa el LID directamente (Baileys lo permite).
+     * Si es un JID @s.whatsapp.net, lo valida y retorna.
      */
     async getJidForSending(phoneOrLid) {
         if (!this.isReady || !this.sock) {
             throw new Error('WhatsApp no está conectado');
         }
 
-        // Si ya es un JID completo (contiene @)
-        if (phoneOrLid.includes('@')) {
-            if (this.isLid(phoneOrLid)) {
-                const lidBase = this.extractJidBase(phoneOrLid);
-
-                logger.info('Intentando resolver LID para envío', {
-                    lid: phoneOrLid,
-                    lidBase,
-                    mapSize: this.lidToPhoneMap.size,
-                    phoneMapSize: this.phoneToLidMap.size
-                });
-
-                // 1. Buscar en el mapa en memoria (poblado por eventos y validateNumber)
-                if (this.lidToPhoneMap.has(lidBase)) {
-                    const phone = this.lidToPhoneMap.get(lidBase);
-                    logger.info('LID resuelto desde mapa en memoria', { lid: phoneOrLid, phone });
-                    return `${phone}@s.whatsapp.net`;
+        // Si es un LID (@lid), intentar resolver a número real
+        if (this.isLid(phoneOrLid)) {
+            const phone = await this.resolveLidToPhone(phoneOrLid);
+            if (phone) {
+                const jid = await this.validateNumber(`${phone}@s.whatsapp.net`);
+                if (jid) {
+                    logger.info('LID resuelto a número para envío', { lid: phoneOrLid, phone, jid });
+                    return jid;
                 }
-
-                // 2. Intentar resolver desde store de contactos
-                const resolvedPhone = await this.resolveLidToPhone(phoneOrLid);
-                if (resolvedPhone) {
-                    logger.info('LID resuelto desde store', { lid: phoneOrLid, phone: resolvedPhone });
-                    return `${resolvedPhone}@s.whatsapp.net`;
-                }
-
-                // 3. Intentar resolver via onWhatsApp ( Baileys puede tener el mapeo internamente)
-                try {
-                    const [result] = await this.sock.onWhatsApp(lidBase);
-                    if (result && result.exists && result.jid) {
-                        const phone = result.jid.split('@')[0];
-                        if (phone && !phone.includes('@')) {
-                            this.lidToPhoneMap.set(lidBase, phone);
-                            logger.info('LID resuelto via onWhatsApp', { lid: phoneOrLid, phone, result });
-                            return result.jid;
-                        }
-                    }
-                    logger.info('onWhatsApp no resolvió el LID', { lid: phoneOrLid, result });
-                } catch (err) {
-                    logger.warn('Error en onWhatsApp para LID', { lid: phoneOrLid, error: err.message });
-                }
-
-                // 4. Intentar enviar al LID directamente (Baileys puede enviar a @lid)
-                logger.info('Usando LID directamente para envío (fallback)', { lid: phoneOrLid });
-                return phoneOrLid;
             }
+            // Fallback: usar el LID directamente (Baileys puede enviar a LIDs)
+            logger.warn('No se pudo resolver LID a número real, usando LID directamente', { lid: phoneOrLid });
             return phoneOrLid;
+        }
+
+        // Si es un JID @s.whatsapp.net, validar que exista
+        if (phoneOrLid.includes('@s.whatsapp.net')) {
+            const jid = await this.validateNumber(phoneOrLid);
+            if (jid) return jid;
+            return null;
         }
 
         // Es solo dígitos: número telefónico
@@ -539,6 +417,8 @@ class WhatsAppService {
                     fromMe: msg.key.fromMe,
                     participant: msg.key.participant,
                     pushName: msg.pushName,
+                    senderPn: msg.key.senderPn || null,
+                    senderLid: msg.key.senderLid || null,
                     messageKeys: msg.message ? Object.keys(msg.message).join(', ') : 'none',
                     keyKeys: Object.keys(msg.key).join(', ')
                 });
@@ -546,7 +426,18 @@ class WhatsAppService {
                 // Si es un LID, intentar resolver el número real para enviar al CRM
                 let resolvedPhone = null;
                 if (isLid) {
-                    resolvedPhone = await this.resolveLidToPhone(remoteJid);
+                    // Intentar obtener el teléfono desde senderPn del key
+                    if (msg.key.senderPn) {
+                        const phone = msg.key.senderPn.replace(/\D/g, '');
+                        if (phone) {
+                            this.lidToPhoneMap.set(jidBase, phone);
+                            logger.info('LID mapeado desde senderPn del mensaje entrante', { lid: remoteJid, phone, senderPn: msg.key.senderPn });
+                            resolvedPhone = phone;
+                        }
+                    }
+                    if (!resolvedPhone) {
+                        resolvedPhone = await this.resolveLidToPhone(remoteJid);
+                    }
                 }
 
                 const messageData = {
@@ -632,15 +523,6 @@ class WhatsAppService {
             const [result] = await this.sock.onWhatsApp(numberId);
 
             if (result && result.exists) {
-                // Capturar el mapeo LID↔número si Baileys lo provee
-                if (result.lid) {
-                    const phone = result.jid.split('@')[0];
-                    const lidBase = result.lid.split('@')[0] || result.lid;
-                    if (phone && lidBase) {
-                        this.lidToPhoneMap.set(lidBase, phone);
-                        this.phoneToLidMap.set(phone, lidBase);
-                    }
-                }
                 return result.jid;
             }
 
@@ -662,20 +544,14 @@ class WhatsAppService {
         try {
             const result = await this.sock.sendMessage(jid, { text });
 
-            // Si se envió a un número (@s.whatsapp.net), capturar su LID del resultado
-            if (result.key?.remoteJid?.includes('@s.whatsapp.net') && result.key?.participant) {
-                const phone = result.key.remoteJid.split('@')[0];
-                const lid = result.key.participant;
-                if (lid && lid.includes('@lid')) {
-                    const lidBase = lid.split('@')[0];
-                    if (phone && lidBase) {
-                        this.lidToPhoneMap.set(lidBase, phone);
-                        this.phoneToLidMap.set(phone, lidBase);
-                    }
-                }
-            }
-
-            logger.info('Mensaje de texto enviado', { jid });
+            const isLidJid = this.isLid(jid);
+            logger.info('Mensaje de texto enviado', {
+                jid,
+                isLid: isLidJid,
+                messageId: result?.key?.id,
+                timestamp: result?.messageTimestamp,
+                status: result?.status
+            });
             return {
                 success: true,
                 messageId: result.key.id,

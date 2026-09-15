@@ -232,7 +232,7 @@ export async function sendMessage(req, res) {
         let jid;
 
         if (isLid) {
-            // Es un LID: usar el nuevo método que maneja LIDs
+            // Es un LID: pasarlo directamente a getJidForSending
             jid = await whatsappService.getJidForSending(phone);
         } else {
             // Es un número telefónico: limpiar y validar
