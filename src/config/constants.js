@@ -27,6 +27,9 @@ export const RATE_LIMIT_CONFIG = {
 export const WHATSAPP_CONFIG = {
     authPath: './auth_info',
     sessionName: 'Tami Maquinarias',
-    qrTimeout: 120000, // 2 minutos
-    maxImageSize: 2 // MB
+    qrTimeout: 120000,
+    qrDisplayDuration: 20000,
+    baileysVersionCacheMs: 24 * 60 * 60 * 1000,
+    logoutTimeoutMs: 5000,
+    maxImageSize: 2
 };
