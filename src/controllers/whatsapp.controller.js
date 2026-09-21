@@ -100,38 +100,44 @@ export async function resetSession(req, res) {
 }
 
 /**
- * Procesa una imagen (URL o Base64) y devuelve un Buffer y el Mimetype detectado
+ * Procesa una fuente de media (URL o Base64) y devuelve un Buffer y el Mimetype detectado
+ * Soporta: imágenes, audios, videos, documentos
  */
-async function processImage(imageSource) {
-    if (!imageSource) return { buffer: null, mimetype: null };
+async function processMedia(mediaSource) {
+    if (!mediaSource) return { buffer: null, mimetype: null };
 
-    let imageBuffer;
+    let mediaBuffer;
     let detectedMimetype = null;
 
-    if (imageSource.startsWith('http://') || imageSource.startsWith('https://')) {
+    if (mediaSource.startsWith('http://') || mediaSource.startsWith('https://')) {
         try {
-            const response = await fetch(imageSource);
-            if (!response.ok) throw new Error('No se pudo descargar la imagen');
+            const response = await fetch(mediaSource);
+            if (!response.ok) throw new Error('No se pudo descargar el archivo');
             detectedMimetype = response.headers.get('content-type') || null;
-            imageBuffer = Buffer.from(await response.arrayBuffer());
+            mediaBuffer = Buffer.from(await response.arrayBuffer());
         } catch (error) {
-            logger.error('Error al descargar imagen', { error: error.message, url: imageSource });
+            logger.error('Error al descargar archivo desde URL', { error: error.message, url: mediaSource });
             return { buffer: null, mimetype: null };
         }
-    } else if (imageSource.startsWith('data:')) {
-        // Método robusto para data URIs
-        const parts = imageSource.split(',');
+    } else if (mediaSource.startsWith('data:')) {
+        const parts = mediaSource.split(',');
         if (parts.length === 2) {
             const mimeMatch = parts[0].match(/data:([^;]+);/);
             detectedMimetype = mimeMatch ? mimeMatch[1] : null;
-            imageBuffer = Buffer.from(parts[1], 'base64');
+            mediaBuffer = Buffer.from(parts[1], 'base64');
         }
     } else {
-        // Si viene base64 puro
-        imageBuffer = Buffer.from(imageSource, 'base64');
+        mediaBuffer = Buffer.from(mediaSource, 'base64');
     }
 
-    return { buffer: imageBuffer, mimetype: detectedMimetype };
+    return { buffer: mediaBuffer, mimetype: detectedMimetype };
+}
+
+/**
+ * Alias para compatibilidad hacia atrás
+ */
+async function processImage(imageSource) {
+    return processMedia(imageSource);
 }
 
 /**
@@ -323,6 +329,102 @@ export async function getReceivedMessages(req, res) {
         res.status(500).json({
             success: false,
             message: 'Error al obtener los mensajes'
+        });
+    }
+}
+
+/**
+ * Envía mensaje con media (imagen, audio, video, documento)
+ * POST /api/whatsapp/send-media
+ * Body: { phone, type, media, caption?, filename?, mimetype? }
+ */
+export async function sendMedia(req, res) {
+    try {
+        if (!whatsappService.isReady) {
+            return res.status(400).json({
+                success: false,
+                message: 'WhatsApp no está conectado'
+            });
+        }
+
+        const { phone, type, media, caption, filename, mimetype: customMimetype } = req.body;
+
+        if (!phone || !type || !media) {
+            return res.status(400).json({
+                success: false,
+                message: 'El teléfono, tipo de media y el contenido del media son obligatorios'
+            });
+        }
+
+        const allowedTypes = ['image', 'audio', 'video', 'document', 'sticker'];
+        if (!allowedTypes.includes(type)) {
+            return res.status(400).json({
+                success: false,
+                message: `Tipo de media no válido. Permitidos: ${allowedTypes.join(', ')}`
+            });
+        }
+
+        // Resolver JID
+        let jid;
+        if (phone.includes('@lid')) {
+            jid = await whatsappService.getJidForSending(phone);
+        } else {
+            const numberId = phone.replace(/\D/g, '');
+            if (numberId.length < 10 || numberId.length > 15) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'El formato del número de teléfono no es válido'
+                });
+            }
+            jid = await whatsappService.getJidForSending(numberId);
+        }
+
+        if (!jid) {
+            return res.status(404).json({
+                success: false,
+                message: 'El número no está registrado en WhatsApp'
+            });
+        }
+
+        // Procesar el media
+        const { buffer, mimetype: detectedMimetype } = await processMedia(media);
+        if (!buffer) {
+            return res.status(400).json({
+                success: false,
+                message: 'No se pudo procesar el archivo de media'
+            });
+        }
+
+        const finalMimetype = customMimetype || detectedMimetype;
+
+        // Enviar según el tipo
+        let result;
+        switch (type) {
+            case 'image':
+                result = await whatsappService.sendImage(jid, buffer, caption || '', finalMimetype);
+                break;
+            case 'audio':
+                result = await whatsappService.sendAudio(jid, buffer, finalMimetype || 'audio/mpeg; codecs=opus');
+                break;
+            case 'video':
+                result = await whatsappService.sendVideo(jid, buffer, caption || '', finalMimetype || 'video/mp4');
+                break;
+            case 'document':
+                result = await whatsappService.sendDocument(jid, buffer, filename || 'archivo', finalMimetype || 'application/pdf');
+                break;
+            case 'sticker':
+                result = await whatsappService.sendSticker(jid, buffer, finalMimetype || 'image/webp');
+                break;
+        }
+
+        logger.info('Media enviado correctamente', { phone, type, jid });
+        res.json(result);
+
+    } catch (error) {
+        logger.error('Error al enviar media', { error: error.message });
+        res.status(500).json({
+            success: false,
+            message: 'Error al enviar el archivo: ' + error.message
         });
     }
 }

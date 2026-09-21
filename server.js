@@ -39,6 +39,9 @@ app.post('/api/whatsapp/send-campaign', sendImageLimiter, whatsappController.sen
 // ENVÍO GENÉRICO DE MENSAJES (para CRM)
 app.post('/api/whatsapp/send-message', generalLimiter, whatsappController.sendMessage);
 
+// ENVÍO DE ARCHIVOS MULTIMEDIA (imagen, audio, video, documento)
+app.post('/api/whatsapp/send-media', sendImageLimiter, whatsappController.sendMedia);
+
 // CONFIGURAR WEBHOOK PARA MENSAJES ENTRANTES
 app.post('/api/whatsapp/webhook', generalLimiter, whatsappController.setupWebhook);
 
