@@ -3,9 +3,10 @@ import makeWASocket, {
     useMultiFileAuthState,
     fetchLatestBaileysVersion,
     makeCacheableSignalKeyStore,
+    downloadContentFromMessage,
+    toBuffer,
 } from '@whiskeysockets/baileys';
 import QRCode from 'qrcode';
-import qrcodeTerminal from 'qrcode-terminal';
 import fs from 'fs';
 import pino from 'pino';
 import { Boom } from '@hapi/boom';
@@ -228,7 +229,7 @@ class WhatsAppService {
                 this.sock = null;
                 setTimeout(() => this.initialize(), 3000);
             } else {
-                logger.info('Sesión cerrada por el usuario');
+                logger.info('Sesión cerrada por el usuario - Reiniciando servicio...');
                 this.sock = null;
 
                 if (fs.existsSync(WHATSAPP_CONFIG.authPath)) {
@@ -249,6 +250,8 @@ class WhatsAppService {
                         }
                     }
                 }
+
+                setTimeout(() => this.initialize(), 3000);
             }
         } else if (connection === 'open') {
             logger.info('Cliente de WhatsApp listo');
@@ -271,14 +274,6 @@ class WhatsAppService {
 
         try {
             this.currentQR = await QRCode.toDataURL(qr);
-
-            console.log('\n========================================');
-            console.log('  ESCANEA EL CÓDIGO QR CON TU TELÉFONO');
-            console.log('========================================\n');
-            qrcodeTerminal.generate(qr, { small: true }, (qrcode) => {
-                console.log(qrcode);
-            });
-            console.log('========================================\n');
 
             clearTimeout(this.qrTimeout);
             this.qrTimeout = setTimeout(() => {
@@ -465,13 +460,20 @@ class WhatsAppService {
                     }
                 }
 
+                const hasMedia = this.hasMedia(msg.message);
+                const mediaType = this.getMediaType(msg.message);
+                const mediaInfo = this.getMediaInfo(msg.message);
+
                 const messageData = {
                     messageId: msg.key.id,
                     from: remoteJid,
                     fromName: msg.pushName || 'Desconocido',
                     timestamp: msg.messageTimestamp,
                     text: this.extractMessageText(msg.message),
-                    hasMedia: this.hasMedia(msg.message),
+                    hasMedia,
+                    mediaType,
+                    mediaInfo,
+                    media: null,
                     rawMessage: msg.message,
                     receivedAt: new Date().toISOString(),
                     // Campos adicionales para LIDs
@@ -480,10 +482,45 @@ class WhatsAppService {
                     resolvedPhone
                 };
 
+                // Descargar media si existe
+                if (hasMedia) {
+                    try {
+                        const mediaBuffer = await this.downloadMedia(msg);
+                        if (mediaBuffer) {
+                            const base64Data = mediaBuffer.toString('base64');
+                            messageData.media = {
+                                mimetype: mediaInfo?.mimetype || 'application/octet-stream',
+                                data: base64Data,
+                                size: mediaBuffer.length,
+                                filename: mediaInfo?.fileName || null,
+                                caption: mediaInfo?.caption || null,
+                                width: mediaInfo?.width || null,
+                                height: mediaInfo?.height || null,
+                                seconds: mediaInfo?.seconds || null
+                            };
+                            logger.info('Media descargado correctamente', {
+                                from: remoteJid,
+                                mediaType,
+                                mimetype: messageData.media.mimetype,
+                                size: messageData.media.size,
+                                filename: messageData.media.filename
+                            });
+                        }
+                    } catch (mediaError) {
+                        logger.error('Error al descargar media del mensaje', {
+                            error: mediaError.message,
+                            messageId: msg.key.id,
+                            mediaType
+                        });
+                    }
+                }
+
                 logger.info('Mensaje entrante recibido', {
                     from: messageData.from,
                     fromName: messageData.fromName,
                     text: messageData.text,
+                    hasMedia: messageData.hasMedia,
+                    mediaType: messageData.mediaType,
                     isLid,
                     resolvedPhone
                 });
@@ -534,6 +571,190 @@ class WhatsAppService {
             message.documentMessage ||
             message.stickerMessage
         );
+    }
+
+    /**
+     * Detecta el tipo de media del mensaje
+     */
+    getMediaType(message) {
+        if (!message) return null;
+        if (message.imageMessage) return 'image';
+        if (message.videoMessage) return 'video';
+        if (message.audioMessage) return 'audio';
+        if (message.documentMessage) return 'document';
+        if (message.stickerMessage) return 'sticker';
+        return null;
+    }
+
+    /**
+     * Extrae metadata del media del mensaje
+     */
+    getMediaInfo(message) {
+        if (!message) return null;
+
+        const mediaType = this.getMediaType(message);
+        if (!mediaType) return null;
+
+        const mediaMessage = message[`${mediaType}Message`];
+        if (!mediaMessage) return null;
+
+        const info = {
+            type: mediaType,
+            mimetype: mediaMessage.mimetype || null,
+            fileLength: mediaMessage.fileLength || null,
+            fileName: mediaMessage.fileName || null,
+            caption: mediaMessage.caption || null,
+            seconds: mediaMessage.seconds || null,
+            width: mediaMessage.width || null,
+            height: mediaMessage.height || null,
+            isViewOnce: mediaMessage.viewOnce || false
+        };
+
+        return info;
+    }
+
+    /**
+     * Descarga el contenido multimedia de un mensaje de WhatsApp
+     */
+    async downloadMedia(message) {
+        if (!this.isReady || !this.sock) {
+            throw new Error('WhatsApp no está conectado');
+        }
+
+        try {
+            const msgContent = message.message;
+            if (!msgContent) {
+                throw new Error('El mensaje no tiene contenido');
+            }
+
+            const mediaType = this.getMediaType(msgContent);
+            if (!mediaType) {
+                throw new Error('El mensaje no contiene media');
+            }
+
+            const mediaMessage = msgContent[`${mediaType}Message`];
+            if (!mediaMessage) {
+                throw new Error(`No se encontró ${mediaType}Message en el contenido`);
+            }
+
+            const stream = await downloadContentFromMessage(mediaMessage, mediaType);
+            const buffer = await toBuffer(stream);
+            return buffer;
+        } catch (error) {
+            logger.error('Error al descargar media', { error: error.message });
+            throw error;
+        }
+    }
+
+    /**
+     * Envía un mensaje de audio (notas de voz)
+     */
+    async sendAudio(jid, audioBuffer, mimetype = 'audio/mpeg; codecs=opus') {
+        if (!this.isReady || !this.sock) {
+            throw new Error('WhatsApp no está conectado');
+        }
+
+        try {
+            const result = await this.sock.sendMessage(jid, {
+                audio: audioBuffer,
+                mimetype,
+                ptt: true
+            });
+
+            logger.info('Audio enviado', { jid });
+            return {
+                success: true,
+                messageId: result.key.id,
+                chatId: jid,
+                timestamp: result.messageTimestamp
+            };
+        } catch (error) {
+            logger.error('Error al enviar audio', { error: error.message, jid });
+            throw error;
+        }
+    }
+
+    /**
+     * Envía un video
+     */
+    async sendVideo(jid, videoBuffer, caption = '', mimetype = 'video/mp4') {
+        if (!this.isReady || !this.sock) {
+            throw new Error('WhatsApp no está conectado');
+        }
+
+        try {
+            const result = await this.sock.sendMessage(jid, {
+                video: videoBuffer,
+                caption: caption || undefined,
+                mimetype
+            });
+
+            logger.info('Video enviado', { jid });
+            return {
+                success: true,
+                messageId: result.key.id,
+                chatId: jid,
+                timestamp: result.messageTimestamp
+            };
+        } catch (error) {
+            logger.error('Error al enviar video', { error: error.message, jid });
+            throw error;
+        }
+    }
+
+    /**
+     * Envía un documento/archivo
+     */
+    async sendDocument(jid, docBuffer, filename, mimetype = 'application/pdf') {
+        if (!this.isReady || !this.sock) {
+            throw new Error('WhatsApp no está conectado');
+        }
+
+        try {
+            const result = await this.sock.sendMessage(jid, {
+                document: docBuffer,
+                fileName: filename,
+                mimetype
+            });
+
+            logger.info('Documento enviado', { jid, filename });
+            return {
+                success: true,
+                messageId: result.key.id,
+                chatId: jid,
+                timestamp: result.messageTimestamp
+            };
+        } catch (error) {
+            logger.error('Error al enviar documento', { error: error.message, jid });
+            throw error;
+        }
+    }
+
+    /**
+     * Envía un sticker
+     */
+    async sendSticker(jid, stickerBuffer, mimetype = 'image/webp') {
+        if (!this.isReady || !this.sock) {
+            throw new Error('WhatsApp no está conectado');
+        }
+
+        try {
+            const result = await this.sock.sendMessage(jid, {
+                sticker: stickerBuffer,
+                mimetype
+            });
+
+            logger.info('Sticker enviado', { jid });
+            return {
+                success: true,
+                messageId: result.key.id,
+                chatId: jid,
+                timestamp: result.messageTimestamp
+            };
+        } catch (error) {
+            logger.error('Error al enviar sticker', { error: error.message, jid });
+            throw error;
+        }
     }
 
     /**
