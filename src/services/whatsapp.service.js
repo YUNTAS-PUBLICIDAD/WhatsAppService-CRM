@@ -7,7 +7,6 @@ import makeWASocket, {
     toBuffer,
 } from '@whiskeysockets/baileys';
 import QRCode from 'qrcode';
-import qrcodeTerminal from 'qrcode-terminal';
 import fs from 'fs';
 import pino from 'pino';
 import { Boom } from '@hapi/boom';
@@ -230,7 +229,7 @@ class WhatsAppService {
                 this.sock = null;
                 setTimeout(() => this.initialize(), 3000);
             } else {
-                logger.info('Sesión cerrada por el usuario');
+                logger.info('Sesión cerrada por el usuario - Reiniciando servicio...');
                 this.sock = null;
 
                 if (fs.existsSync(WHATSAPP_CONFIG.authPath)) {
@@ -251,6 +250,8 @@ class WhatsAppService {
                         }
                     }
                 }
+
+                setTimeout(() => this.initialize(), 3000);
             }
         } else if (connection === 'open') {
             logger.info('Cliente de WhatsApp listo');
@@ -273,14 +274,6 @@ class WhatsAppService {
 
         try {
             this.currentQR = await QRCode.toDataURL(qr);
-
-            console.log('\n========================================');
-            console.log('  ESCANEA EL CÓDIGO QR CON TU TELÉFONO');
-            console.log('========================================\n');
-            qrcodeTerminal.generate(qr, { small: true }, (qrcode) => {
-                console.log(qrcode);
-            });
-            console.log('========================================\n');
 
             clearTimeout(this.qrTimeout);
             this.qrTimeout = setTimeout(() => {
