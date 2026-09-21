@@ -12,6 +12,10 @@ import { Boom } from '@hapi/boom';
 import logger from './logger.service.js';
 import { WHATSAPP_CONFIG } from '../config/constants.js';
 
+// Cache de la version de Baileys: evita pedirla por red en cada initialize()
+let cachedBaileysVersion = null;
+let cachedBaileysVersionAt = 0;
+
 class WhatsAppService {
     constructor() {
         this.sock = null;
@@ -97,6 +101,33 @@ class WhatsAppService {
     }
 
     /**
+     * Obtiene la version de Baileys, usando cache de 24h para evitar
+     * una petición de red en cada initialize() (esto sumaba latencia
+     * cada vez que se pedía un QR nuevo o se reconectaba).
+     */
+    async getBaileysVersion() {
+        const isCacheValid = cachedBaileysVersion &&
+            (Date.now() - cachedBaileysVersionAt) < WHATSAPP_CONFIG.baileysVersionCacheMs;
+
+        if (isCacheValid) {
+            return cachedBaileysVersion;
+        }
+
+        try {
+            const { version } = await fetchLatestBaileysVersion();
+            cachedBaileysVersion = version;
+            cachedBaileysVersionAt = Date.now();
+            return version;
+        } catch (error) {
+            logger.warn('No se pudo obtener la última versión de Baileys, usando cache/fallback', { error: error.message });
+            // Si falla la red pero ya teníamos una versión cacheada (aunque vencida), la reusamos
+            // en vez de bloquear la inicialización del socket.
+            if (cachedBaileysVersion) return cachedBaileysVersion;
+            throw error;
+        }
+    }
+
+    /**
      * Inicializa el cliente de WhatsApp
      */
     async initialize() {
@@ -120,7 +151,7 @@ class WhatsAppService {
 
                 const { state, saveCreds } = await useMultiFileAuthState(WHATSAPP_CONFIG.authPath);
 
-                const { version } = await fetchLatestBaileysVersion(); // version mas reciente
+                const version = await this.getBaileysVersion(); // version cacheada (evita red en cada init)
 
                 this.sock = makeWASocket({ // socket de WhatsApp
                     version,
@@ -259,7 +290,10 @@ class WhatsAppService {
             this.emitQRUpdate({
                 qrData: {
                     image: this.currentQR,
-                    expiresAt: Date.now() + 60000,
+                    // Antes esto decía 60000ms fijo, pero Baileys refresca el QR real
+                    // cada ~20s (ver WHATSAPP_CONFIG.qrDisplayDuration). Con 60s el
+                    // frontend mostraba un contador que no coincidía con la realidad.
+                    expiresAt: Date.now() + WHATSAPP_CONFIG.qrDisplayDuration,
                     createdAt: new Date().toISOString()
                 },
                 connectionStatus: 'qr-ready'
@@ -640,6 +674,15 @@ class WhatsAppService {
 
             logger.info('Sesión reseteada exitosamente');
 
+            // BUG encontrado: antes esto no volvía a llamar a initialize() en el
+            // camino exitoso (solo lo hacía en el catch, si algo fallaba). Eso
+            // dejaba el servicio sin socket y sin QR después de un reset,
+            // y la web se quedaba en "Generando código..." para siempre porque
+            // nunca llegaba un nuevo evento 'qr-update'.
+            this.initialize().catch(error => {
+                logger.error('Error al reinicializar después de resetear sesión', { error: error.message });
+            });
+
             return true;
         } catch (error) {
             this.isInitializing = false;
@@ -662,7 +705,36 @@ class WhatsAppService {
     async destroy() {
         if (this.sock) {
             this.sock.ev.removeAllListeners();
-            await this.sock.logout();
+
+            if (this.isReady) {
+                // Hay una sesión autenticada de verdad: intentamos cerrarla
+                // formalmente, pero con timeout, porque logout() espera un
+                // ACK del servidor de WhatsApp que a veces no llega.
+                try {
+                    await Promise.race([
+                        this.sock.logout(),
+                        new Promise((_, reject) =>
+                            setTimeout(() => reject(new Error('Timeout esperando ACK de logout')), WHATSAPP_CONFIG.logoutTimeoutMs)
+                        )
+                    ]);
+                } catch (error) {
+                    logger.warn('No se pudo cerrar sesión limpiamente (logout), forzando cierre del socket', { error: error.message });
+                }
+            } else {
+                // Todavía estábamos en fase de QR (sin sesión autenticada):
+                // no hay nada que "logout", así que solo cerramos el socket.
+                // Antes esto igual llamaba a logout() y podía quedarse
+                // esperando un ACK que nunca iba a llegar, retrasando
+                // la generación del siguiente QR.
+                logger.info('Cerrando socket sin sesión autenticada (solo fase de QR)');
+            }
+
+            try {
+                this.sock.end(undefined);
+            } catch (error) {
+                logger.warn('Error al cerrar el socket', { error: error.message });
+            }
+
             this.sock = null;
         }
         this.isReady = false;
@@ -680,7 +752,7 @@ class WhatsAppService {
             hasActiveQR: !!this.currentQR,
             qrData: this.currentQR ? {
                 image: this.currentQR,
-                expiresAt: Date.now() + 60000
+                expiresAt: Date.now() + WHATSAPP_CONFIG.qrDisplayDuration
             } : null,
             connectionStatus: this.isReady ? 'connected' : (this.currentQR ? 'qr-ready' : 'disconnected')
         };
