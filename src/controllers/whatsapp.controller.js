@@ -1,7 +1,5 @@
 import whatsappService from '../services/whatsapp.service.js';
 import logger from '../services/logger.service.js';
-import { getProductDetailsTemplate } from '../../templates.js';
-import { WHATSAPP_CONFIG } from '../config/constants.js';
 
 // NO importar mysql aquí arriba
 let pool = null;

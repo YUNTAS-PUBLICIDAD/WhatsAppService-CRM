@@ -28,7 +28,7 @@ export const RATE_LIMIT_CONFIG = {
 // Configuracion de WhatsApp
 export const WHATSAPP_CONFIG = {
     authPath: './auth_info',
-    sessionName: 'Tami Maquinarias',
+    sessionName: 'XIO CRM',
     qrTimeout: 120000,
     qrDisplayDuration: 20000,
     baileysVersionCacheMs: 24 * 60 * 60 * 1000,
