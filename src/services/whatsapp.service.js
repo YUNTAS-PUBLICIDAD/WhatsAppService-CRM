@@ -317,7 +317,14 @@ class WhatsAppService {
      * Resuelve un LID a un número de teléfono real usando el store de Baileys.
      * Si no se puede resolver, retorna null.
      */
-    async resolveLidToPhone(lid) {
+
+    jidToPhone(jid){
+        if (!jid || !jid.endsWith('@s.whatsapp.net')) return null
+        const phone = jid.split('@')[0].split(':')[0].replace(/\D/g, '')
+        return phone || null
+    }
+
+    async resolveLidToPhone(lid, key = {}) {
         if (!this.isReady || !this.sock) {
             return null;
         }
@@ -328,46 +335,21 @@ class WhatsAppService {
             return this.lidToPhoneMap.get(lidBase);
         }
 
+        for (const candidate of [key.remoteJidAlt, key.participantAlt, key.senderPn]) {
+            const phone = this.jidToPhone(candidate)
+            if (phone) {
+                this.lidToPhoneMap.set(lidBase, phone)
+                return phone
+            }
+        }
+
         // Intentar resolver usando el store de contactos de Baileys
         try {
-            const store = this.sock.store;
-            const contacts = store?.contacts || {};
-            const contactKeys = Object.keys(contacts);
-
-            logger.info('Intentando resolver LID desde store', {
-                lid,
-                lidBase,
-                storeExists: !!store,
-                storeKeys: store ? Object.keys(store).join(', ') : 'none',
-                contactsInStore: contactKeys.length
-            });
-
-            // Log de los primeros contactos del store para diagnosticar
-            if (contactKeys.length > 0) {
-                const sampleKeys = contactKeys.slice(0, 3);
-                for (const key of sampleKeys) {
-                    const c = contacts[key];
-                    logger.info('Contacto en store', {
-                        key,
-                        jid: c.jid,
-                        lid: c.lid,
-                        name: c.name || c.notify,
-                        hasLid: !!c.lid,
-                        allKeys: Object.keys(c).join(', ')
-                    });
-                }
-            }
-            
-            // Buscar en los contactos por si hay una referencia cruzada
-            for (const [jid, contact] of Object.entries(contacts)) {
-                if (contact.lid === lidBase || jid.includes(lidBase)) {
-                    const phone = this.extractJidBase(jid);
-                    if (phone && !phone.includes('@')) {
-                        this.lidToPhoneMap.set(lidBase, phone);
-                        logger.info('LID resuelto a número desde store', { lid, phone });
-                        return phone;
-                    }
-                }
+            const pnJid = await this.sock?.signalRepository?.lidMapping?.getPNForLID?.(lid);
+            const phone = this.jidToPhone(pnJid)
+            if (phone) {
+                this.lidToPhoneMap.set(lidBase, phone)
+                return phone
             }
         } catch (error) {
             logger.warn('Error al resolver LID desde store', { error: error.message, lid });
@@ -440,24 +422,15 @@ class WhatsAppService {
                     senderPn: msg.key.senderPn || null,
                     senderLid: msg.key.senderLid || null,
                     messageKeys: msg.message ? Object.keys(msg.message).join(', ') : 'none',
-                    keyKeys: Object.keys(msg.key).join(', ')
+                    keyKeys: Object.keys(msg.key).join(', '),
+                    remoteJidAlt: msg.key.remoteJidAlt || null
                 });
 
                 // Si es un LID, intentar resolver el número real para enviar al CRM
                 let resolvedPhone = null;
                 if (isLid) {
                     // Intentar obtener el teléfono desde senderPn del key
-                    if (msg.key.senderPn) {
-                        const phone = msg.key.senderPn.replace(/\D/g, '');
-                        if (phone) {
-                            this.lidToPhoneMap.set(jidBase, phone);
-                            logger.info('LID mapeado desde senderPn del mensaje entrante', { lid: remoteJid, phone, senderPn: msg.key.senderPn });
-                            resolvedPhone = phone;
-                        }
-                    }
-                    if (!resolvedPhone) {
-                        resolvedPhone = await this.resolveLidToPhone(remoteJid);
-                    }
+                    resolvedPhone = await this.resolveLidToPhone(remoteJid, msg.key)
                 }
 
                 const hasMedia = this.hasMedia(msg.message);
