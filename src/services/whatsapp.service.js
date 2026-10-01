@@ -439,7 +439,14 @@ class WhatsAppService {
                 const messageData = {
                     messageId: msg.key.id,
                     from: remoteJid,
-                    fromName: msg.pushName || 'Desconocido',
+                    // Null, no "Desconocido". Este campo es el pushName que
+                    // publica la persona, y cuando no hay, lo correcto es
+                    // decir que no hay: el CRM ya sabe degradar a telefono
+                    // formateado ("+51 953 740 108") y, si tampoco lo tiene,
+                    // a una etiqueta neutra. Mandando la palabra "Desconocido"
+                    // el CRM la tomaba por un nombre de verdad y la escribia
+                    // en la ficha del contacto, tapando ese respaldo.
+                    fromName: msg.pushName || null,
                     timestamp: msg.messageTimestamp,
                     text: this.extractMessageText(msg.message),
                     hasMedia,
