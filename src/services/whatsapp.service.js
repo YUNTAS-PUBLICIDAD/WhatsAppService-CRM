@@ -219,10 +219,7 @@ class WhatsAppService {
             this.isReady = false;
             this.currentQR = null;
 
-            this.emitQRUpdate({
-                connectionStatus: 'disconnected',
-                qrData: null
-            });
+            this.emitQRUpdate(this.getStatus());
 
             if (shouldReconnect) {
                 logger.info('Reconectando...');
@@ -259,10 +256,7 @@ class WhatsAppService {
             this.currentQR = null;
             clearTimeout(this.qrTimeout);
 
-            this.emitQRUpdate({
-                connectionStatus: 'connected',
-                qrData: null
-            });
+            this.emitQRUpdate(this.getStatus());
         }
     }
 
@@ -283,6 +277,11 @@ class WhatsAppService {
             }, WHATSAPP_CONFIG.qrTimeout);
 
             this.emitQRUpdate({
+                ...this.getStatus(),
+                // Este qrData gana al de getStatus() a propósito: lleva además
+                // `createdAt`, que el CRM usa para identificar cada QR y reiniciar
+                // su contador. getStatus() no lo tiene porque no guarda cuándo se
+                // generó el código.
                 qrData: {
                     image: this.currentQR,
                     // Antes esto decía 60000ms fijo, pero Baileys refresca el QR real
@@ -837,10 +836,7 @@ class WhatsAppService {
 
             await this.destroy(); // destruir recursos y cliente existente
 
-            this.emitQRUpdate({
-                connectionStatus: 'disconnected',
-                qrData: null
-            });
+            this.emitQRUpdate(this.getStatus());
 
             // Esperar antes de eliminar archivos
             await new Promise(resolve => setTimeout(resolve, 1000));
@@ -948,7 +944,12 @@ class WhatsAppService {
                 image: this.currentQR,
                 expiresAt: Date.now() + WHATSAPP_CONFIG.qrDisplayDuration
             } : null,
-            connectionStatus: this.isReady ? 'connected' : (this.currentQR ? 'qr-ready' : 'disconnected')
+            connectionStatus: this.isReady ? 'connected' : (this.currentQR ? 'qr-ready' : 'disconnected'),
+            // Cuenta vinculada, para que el CRM pueda mostrar de quién es la
+            // sesión activa. Baileys la expone como { id, name }, con el id en
+            // formato "51987654321:12@s.whatsapp.net" (el ":12" es el número de
+            // dispositivo, no parte del teléfono). Solo existe con sesión abierta.
+            user: this.sock?.user ?? null
         };
     }
 }
