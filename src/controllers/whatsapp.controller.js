@@ -1,5 +1,5 @@
-import whatsappService from '../services/whatsapp.service.js';
-import logger from '../services/logger.service.js';
+import whatsappService from "../services/whatsapp.service.js";
+import logger from "../services/logger.service.js";
 
 // NO importar mysql aquí arriba
 let pool = null;
@@ -10,91 +10,95 @@ let pool = null;
  * Obtiene el estado de la conexión de WhatsApp y el QR
  */
 export async function getStatus(req, res) {
-    try {
-        const status = whatsappService.getStatus();
-        res.json(status);
-    } catch (error) {
-        logger.error('Error al obtener estado de WhatsApp', { error: error.message });
-        res.status(500).json({
-            success: false,
-            message: 'Error al obtener el estado'
-        });
-    }
+  try {
+    const status = whatsappService.getStatus();
+    res.json(status);
+  } catch (error) {
+    logger.error("Error al obtener estado de WhatsApp", {
+      error: error.message,
+    });
+    res.status(500).json({
+      success: false,
+      message: "Error al obtener el estado",
+    });
+  }
 }
 
 /**
  * Solicita un nuevo código QR
  */
 export async function requestQR(req, res) {
-    try {
-        if (whatsappService.isReady) {
-            return res.status(400).json({
-                success: false,
-                message: 'WhatsApp ya está conectado'
-            });
-        }
-
-        if (whatsappService.isInitializing) {
-            return res.status(409).json({
-                success: false,
-                message: 'Ya hay una operación en progreso'
-            });
-        }
-
-        // Si no existe el socket, se inicializa
-        if (!whatsappService.sock) {
-            await whatsappService.initialize();
-        } else {
-            // Si existe, se destruye y reinicia
-            await whatsappService.destroy();
-            await whatsappService.initialize();
-        }
-
-        res.json({
-            success: true,
-            message: 'Generando nuevo QR...'
-        });
-    } catch (error) {
-        logger.error('Error al solicitar nuevo QR', { error: error.message });
-        res.status(500).json({
-            success: false,
-            message: 'Error al generar QR'
-        });
+  try {
+    if (whatsappService.isReady) {
+      return res.status(400).json({
+        success: false,
+        message: "WhatsApp ya está conectado",
+      });
     }
+
+    if (whatsappService.isInitializing) {
+      return res.status(409).json({
+        success: false,
+        message: "Ya hay una operación en progreso",
+      });
+    }
+
+    // Si no existe el socket, se inicializa
+    if (!whatsappService.sock) {
+      await whatsappService.initialize();
+    } else {
+      // Si existe, se destruye y reinicia
+      await whatsappService.destroy();
+      await whatsappService.initialize();
+    }
+
+    res.json({
+      success: true,
+      message: "Generando nuevo QR...",
+    });
+  } catch (error) {
+    logger.error("Error al solicitar nuevo QR", { error: error.message });
+    res.status(500).json({
+      success: false,
+      message: "Error al generar QR",
+    });
+  }
 }
 
 /**
  * Reinicia la sesión de WhatsApp
  */
 export async function resetSession(req, res) {
-    try {
-        if (whatsappService.isInitializing) {
-            return res.status(409).json({
-                success: false,
-                message: 'Ya hay una operación de reseteo en progreso'
-            });
-        }
-
-        await whatsappService.resetSession();
-
-        res.json({
-            success: true,
-            message: 'Sesión reseteada'
-        });
-    } catch (error) {
-        logger.error('Error al resetear la sesión de WhatsApp', { error: error.message });
-        if (whatsappService.sock) {
-            res.json({
-                success: true,
-                message: 'Sesión reiniciada con advertencias. Generando QR...',
-            });
-        } else {
-            res.status(500).json({
-                success: false,
-                message: 'Error al reiniciar sesión',
-            });
-        }
+  try {
+    if (whatsappService.isInitializing) {
+      return res.status(409).json({
+        success: false,
+        message: "Ya hay una operación de reseteo en progreso",
+      });
     }
+
+    await whatsappService.resetSession();
+
+    res.json({
+      success: true,
+      message: "Sesión reseteada",
+    });
+  } catch (error) {
+    logger.error("Error al resetear la sesión de WhatsApp", {
+      error: error.message,
+    });
+    if (whatsappService.sock) {
+      res.json({
+        success: true,
+        message: "Sesión reiniciada con advertencias. Generando QR...",
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: "Error al reiniciar sesión",
+      });
+    }
+  }
 }
 
 /**
@@ -102,233 +106,262 @@ export async function resetSession(req, res) {
  * Soporta: imágenes, audios, videos, documentos
  */
 async function processMedia(mediaSource) {
-    if (!mediaSource) return { buffer: null, mimetype: null };
+  if (!mediaSource) return { buffer: null, mimetype: null };
 
-    let mediaBuffer;
-    let detectedMimetype = null;
+  let mediaBuffer;
+  let detectedMimetype = null;
 
-    if (mediaSource.startsWith('http://') || mediaSource.startsWith('https://')) {
-        try {
-            const response = await fetch(mediaSource);
-            if (!response.ok) throw new Error('No se pudo descargar el archivo');
-            detectedMimetype = response.headers.get('content-type') || null;
-            mediaBuffer = Buffer.from(await response.arrayBuffer());
-        } catch (error) {
-            logger.error('Error al descargar archivo desde URL', { error: error.message, url: mediaSource });
-            return { buffer: null, mimetype: null };
-        }
-    } else if (mediaSource.startsWith('data:')) {
-        const parts = mediaSource.split(',');
-        if (parts.length === 2) {
-            const mimeMatch = parts[0].match(/data:([^;]+);/);
-            detectedMimetype = mimeMatch ? mimeMatch[1] : null;
-            mediaBuffer = Buffer.from(parts[1], 'base64');
-        }
-    } else {
-        mediaBuffer = Buffer.from(mediaSource, 'base64');
+  if (mediaSource.startsWith("http://") || mediaSource.startsWith("https://")) {
+    try {
+      const response = await fetch(mediaSource);
+      if (!response.ok) throw new Error("No se pudo descargar el archivo");
+      detectedMimetype = response.headers.get("content-type") || null;
+      mediaBuffer = Buffer.from(await response.arrayBuffer());
+    } catch (error) {
+      logger.error("Error al descargar archivo desde URL", {
+        error: error.message,
+        url: mediaSource,
+      });
+      return { buffer: null, mimetype: null };
     }
+  } else if (mediaSource.startsWith("data:")) {
+    const parts = mediaSource.split(",");
+    if (parts.length === 2) {
+      const mimeMatch = parts[0].match(/data:([^;]+);/);
+      detectedMimetype = mimeMatch ? mimeMatch[1] : null;
+      mediaBuffer = Buffer.from(parts[1], "base64");
+    }
+  } else {
+    mediaBuffer = Buffer.from(mediaSource, "base64");
+  }
 
-    return { buffer: mediaBuffer, mimetype: detectedMimetype };
+  return { buffer: mediaBuffer, mimetype: detectedMimetype };
 }
 
 /**
  * Alias para compatibilidad hacia atrás
  */
 async function processImage(imageSource) {
-    return processMedia(imageSource);
+  return processMedia(imageSource);
 }
 
 /**
  * Envía campaña de WhatsApp (llamado desde Laravel)
  */
 export async function sendCampaign(req, res) {
-    try {
-        if (!whatsappService.isReady) {
-            return res.status(400).json({
-                success: false,
-                message: 'WhatsApp no está conectado'
-            });
-        }
-
-        const { phone, message, image, messages } = req.body;
-
-        // Limpiar número
-        const numberId = (phone || (messages && messages[0] && messages[0].phone) || '').replace(/\D/g, '');
-        if (numberId.length < 10 || numberId.length > 15) {
-            return res.status(400).json({ success: false, message: 'Número de teléfono no válido' });
-        }
-        const jid = await whatsappService.validateNumber(`${numberId}@s.whatsapp.net`);
-        if (!jid) return res.status(404).json({ success: false, message: 'Número no registrado' });
-
-        // Función interna para enviar un mensaje individual
-        const sendOne = async (msgText, msgImage) => {
-            try {
-                if (msgImage) {
-                    const { buffer, mimetype } = await processImage(msgImage);
-                    return await whatsappService.sendImage(jid, buffer, msgText, mimetype);
-                }
-                return await whatsappService.sendMessage(jid, msgText);
-            } catch (err) {
-                logger.error('Error enviando mensaje individual en campaña', { error: err.message });
-                throw err;
-            }
-        };
-
-        // Si viene un array de mensajes (Secuencia)
-        if (Array.isArray(messages) && messages.length > 0) {
-            // Enviamos respuesta inmediata para que Laravel no espere
-            res.json({ success: true, message: 'Secuencia de mensajes iniciada' });
-
-            let currentDelay = 0;
-            for (const msg of messages) {
-                currentDelay += (msg.delay || 0);
-                setTimeout(async () => {
-                    try {
-                        await sendOne(msg.message, msg.image);
-                        logger.info('Mensaje de secuencia enviado', { phone: numberId, delay: msg.delay });
-                    } catch (e) {
-                        logger.error('Fallo en mensaje de secuencia', { error: e.message });
-                    }
-                }, currentDelay * 60000); // convertir minutos a ms
-            }
-            return;
-        }
-
-        // Si es un mensaje único (Tradicional)
-        if (!message) return res.status(400).json({ success: false, message: 'Mensaje obligatorio' });
-        
-        const result = await sendOne(message, image);
-        logger.info('Campaña única enviada correctamente', { phone: numberId });
-        res.json(result);
-
-    } catch (error) {
-        logger.error('Error al enviar campaña de WhatsApp', { error: error.message });
-        res.status(500).json({
-            success: false,
-            message: 'Error al enviar la campaña: ' + error.message
-        });
+  try {
+    if (!whatsappService.isReady) {
+      return res.status(400).json({
+        success: false,
+        message: "WhatsApp no está conectado",
+      });
     }
+
+    const { phone, message, image, messages } = req.body;
+
+    // Limpiar número
+    const numberId = (
+      phone ||
+      (messages && messages[0] && messages[0].phone) ||
+      ""
+    ).replace(/\D/g, "");
+    if (numberId.length < 10 || numberId.length > 15) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Número de teléfono no válido" });
+    }
+    const jid = await whatsappService.validateNumber(
+      `${numberId}@s.whatsapp.net`,
+    );
+    if (!jid)
+      return res
+        .status(404)
+        .json({ success: false, message: "Número no registrado" });
+
+    // Función interna para enviar un mensaje individual
+    const sendOne = async (msgText, msgImage) => {
+      try {
+        if (msgImage) {
+          const { buffer, mimetype } = await processImage(msgImage);
+          return await whatsappService.sendImage(
+            jid,
+            buffer,
+            msgText,
+            mimetype,
+          );
+        }
+        return await whatsappService.sendMessage(jid, msgText);
+      } catch (err) {
+        logger.error("Error enviando mensaje individual en campaña", {
+          error: err.message,
+        });
+        throw err;
+      }
+    };
+
+    // Si viene un array de mensajes (Secuencia)
+    if (Array.isArray(messages) && messages.length > 0) {
+      // Enviamos respuesta inmediata para que Laravel no espere
+      res.json({ success: true, message: "Secuencia de mensajes iniciada" });
+
+      let currentDelay = 0;
+      for (const msg of messages) {
+        currentDelay += msg.delay || 0;
+        setTimeout(async () => {
+          try {
+            await sendOne(msg.message, msg.image);
+            logger.info("Mensaje de secuencia enviado", {
+              phone: numberId,
+              delay: msg.delay,
+            });
+          } catch (e) {
+            logger.error("Fallo en mensaje de secuencia", { error: e.message });
+          }
+        }, currentDelay * 60000); // convertir minutos a ms
+      }
+      return;
+    }
+
+    // Si es un mensaje único (Tradicional)
+    if (!message)
+      return res
+        .status(400)
+        .json({ success: false, message: "Mensaje obligatorio" });
+
+    const result = await sendOne(message, image);
+    logger.info("Campaña única enviada correctamente", { phone: numberId });
+    res.json(result);
+  } catch (error) {
+    logger.error("Error al enviar campaña de WhatsApp", {
+      error: error.message,
+    });
+    res.status(500).json({
+      success: false,
+      message: "Error al enviar la campaña: " + error.message,
+    });
+  }
 }
 
 /**
  * Envía mensaje genérico de texto (para CRM)
  */
 export async function sendMessage(req, res) {
-    try {
-        if (!whatsappService.isReady) {
-            return res.status(400).json({
-                success: false,
-                message: 'WhatsApp no está conectado'
-            });
-        }
-
-        const { phone, message } = req.body;
-
-        if (!phone || !message) {
-            return res.status(400).json({
-                success: false,
-                message: 'El teléfono y el mensaje son obligatorios'
-            });
-        }
-
-        // Detectar si es un LID (Linked Identity) o un número telefónico
-        const isLid = phone.includes('@lid');
-        let jid;
-
-        if (isLid) {
-            // Es un LID: pasarlo directamente a getJidForSending
-            jid = await whatsappService.getJidForSending(phone);
-        } else {
-            // Es un número telefónico: limpiar y validar
-            const numberId = phone.replace(/\D/g, '');
-            if (numberId.length < 10 || numberId.length > 15) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'El formato del número de teléfono no es válido'
-                });
-            }
-            jid = await whatsappService.getJidForSending(numberId);
-        }
-
-        if (!jid) {
-            return res.status(404).json({
-                success: false,
-                message: 'El número no está registrado en WhatsApp'
-            });
-        }
-
-        const result = await whatsappService.sendMessage(jid, message);
-
-        res.json(result);
-    } catch (error) {
-        logger.error('Error al enviar mensaje', { error: error.message });
-        res.status(500).json({
-            success: false,
-            message: 'Error al enviar el mensaje'
-        });
+  try {
+    if (!whatsappService.isReady) {
+      return res.status(400).json({
+        success: false,
+        message: "WhatsApp no está conectado",
+      });
     }
+    const { phone, message } = req.body;
+
+    if (!phone || !message) {
+      return res.status(400).json({
+        success: false,
+        message: "El teléfono y el mensaje son obligatorios",
+      });
+    }
+
+    // Detectar si es un LID (Linked Identity) o un número telefónico
+    const isLid = phone.includes("@lid");
+    let jid;
+
+    if (isLid) {
+      // Es un LID: pasarlo directamente a getJidForSending
+      jid = await whatsappService.getJidForSending(phone);
+    } else {
+      // Es un número telefónico: limpiar y validar
+      const numberId = phone.replace(/\D/g, "");
+      if (numberId.length < 10 || numberId.length > 15) {
+        return res.status(400).json({
+          success: false,
+          message: "El formato del número de teléfono no es válido",
+        });
+      }
+      jid = await whatsappService.getJidForSending(numberId);
+    }
+
+    if (!jid) {
+      return res.status(404).json({
+        success: false,
+        message: "El número no está registrado en WhatsApp",
+      });
+    }
+
+    const result = await whatsappService.sendMessage(jid, message);
+
+    res.json(result);
+  } catch (error) {
+    logger.error("Error al enviar mensaje", { error: error.message });
+    res.status(500).json({
+      success: false,
+      message: "Error al enviar el mensaje",
+    });
+  }
 }
 
 /**
  * Configura URL del webhook para mensajes entrantes
  */
 export async function setupWebhook(req, res) {
-    try {
-        const { url } = req.body;
+  try {
+    const { url } = req.body;
 
-        if (!url) {
-            return res.status(400).json({
-                success: false,
-                message: 'La URL del webhook es obligatoria'
-            });
-        }
-
-        // Validar URL
-        try {
-            new URL(url);
-        } catch {
-            return res.status(400).json({
-                success: false,
-                message: 'La URL del webhook no es válida'
-            });
-        }
-
-        whatsappService.setWebhookUrl(url);
-
-        res.json({
-            success: true,
-            message: 'Webhook configurado correctamente',
-            url: url
-        });
-    } catch (error) {
-        logger.error('Error al configurar webhook', { error: error.message });
-        res.status(500).json({
-            success: false,
-            message: 'Error al configurar el webhook'
-        });
+    if (!url) {
+      return res.status(400).json({
+        success: false,
+        message: "La URL del webhook es obligatoria",
+      });
     }
+
+    // Validar URL
+    try {
+      new URL(url);
+    } catch {
+      return res.status(400).json({
+        success: false,
+        message: "La URL del webhook no es válida",
+      });
+    }
+
+    whatsappService.setWebhookUrl(url);
+
+    res.json({
+      success: true,
+      message: "Webhook configurado correctamente",
+      url: url,
+    });
+  } catch (error) {
+    logger.error("Error al configurar webhook", { error: error.message });
+    res.status(500).json({
+      success: false,
+      message: "Error al configurar el webhook",
+    });
+  }
 }
 
 /**
  * Obtiene mensajes recibidos recientes
  */
 export async function getReceivedMessages(req, res) {
-    try {
-        const limit = parseInt(req.query.limit) || 50;
-        const messages = whatsappService.getReceivedMessages(limit);
+  try {
+    const limit = parseInt(req.query.limit) || 50;
+    const messages = whatsappService.getReceivedMessages(limit);
 
-        res.json({
-            success: true,
-            messages: messages,
-            total: messages.length
-        });
-    } catch (error) {
-        logger.error('Error al obtener mensajes recibidos', { error: error.message });
-        res.status(500).json({
-            success: false,
-            message: 'Error al obtener los mensajes'
-        });
-    }
+    res.json({
+      success: true,
+      messages: messages,
+      total: messages.length,
+    });
+  } catch (error) {
+    logger.error("Error al obtener mensajes recibidos", {
+      error: error.message,
+    });
+    res.status(500).json({
+      success: false,
+      message: "Error al obtener los mensajes",
+    });
+  }
 }
 
 /**
@@ -337,93 +370,122 @@ export async function getReceivedMessages(req, res) {
  * Body: { phone, type, media, caption?, filename?, mimetype? }
  */
 export async function sendMedia(req, res) {
-    try {
-        if (!whatsappService.isReady) {
-            return res.status(400).json({
-                success: false,
-                message: 'WhatsApp no está conectado'
-            });
-        }
-
-        const { phone, type, media, caption, filename, mimetype: customMimetype } = req.body;
-
-        if (!phone || !type || !media) {
-            return res.status(400).json({
-                success: false,
-                message: 'El teléfono, tipo de media y el contenido del media son obligatorios'
-            });
-        }
-
-        const allowedTypes = ['image', 'audio', 'video', 'document', 'sticker'];
-        if (!allowedTypes.includes(type)) {
-            return res.status(400).json({
-                success: false,
-                message: `Tipo de media no válido. Permitidos: ${allowedTypes.join(', ')}`
-            });
-        }
-
-        // Resolver JID
-        let jid;
-        if (phone.includes('@lid')) {
-            jid = await whatsappService.getJidForSending(phone);
-        } else {
-            const numberId = phone.replace(/\D/g, '');
-            if (numberId.length < 10 || numberId.length > 15) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'El formato del número de teléfono no es válido'
-                });
-            }
-            jid = await whatsappService.getJidForSending(numberId);
-        }
-
-        if (!jid) {
-            return res.status(404).json({
-                success: false,
-                message: 'El número no está registrado en WhatsApp'
-            });
-        }
-
-        // Procesar el media
-        const { buffer, mimetype: detectedMimetype } = await processMedia(media);
-        if (!buffer) {
-            return res.status(400).json({
-                success: false,
-                message: 'No se pudo procesar el archivo de media'
-            });
-        }
-
-        const finalMimetype = customMimetype || detectedMimetype;
-
-        // Enviar según el tipo
-        let result;
-        switch (type) {
-            case 'image':
-                result = await whatsappService.sendImage(jid, buffer, caption || '', finalMimetype);
-                break;
-            case 'audio':
-                result = await whatsappService.sendAudio(jid, buffer, finalMimetype || 'audio/mpeg; codecs=opus');
-                break;
-            case 'video':
-                result = await whatsappService.sendVideo(jid, buffer, caption || '', finalMimetype || 'video/mp4');
-                break;
-            case 'document':
-                result = await whatsappService.sendDocument(jid, buffer, filename || 'archivo', finalMimetype || 'application/pdf');
-                break;
-            case 'sticker':
-                result = await whatsappService.sendSticker(jid, buffer, finalMimetype || 'image/webp');
-                break;
-        }
-
-        logger.info('Media enviado correctamente', { phone, type, jid });
-        res.json(result);
-
-    } catch (error) {
-        logger.error('Error al enviar media', { error: error.message });
-        res.status(500).json({
-            success: false,
-            message: 'Error al enviar el archivo: ' + error.message
-        });
+  try {
+    if (!whatsappService.isReady) {
+      return res.status(400).json({
+        success: false,
+        message: "WhatsApp no está conectado",
+      });
     }
-}
 
+    const {
+      phone,
+      type,
+      media,
+      caption,
+      filename,
+      mimetype: customMimetype,
+    } = req.body;
+
+    if (!phone || !type || !media) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "El teléfono, tipo de media y el contenido del media son obligatorios",
+      });
+    }
+
+    const allowedTypes = ["image", "audio", "video", "document", "sticker"];
+    if (!allowedTypes.includes(type)) {
+      return res.status(400).json({
+        success: false,
+        message: `Tipo de media no válido. Permitidos: ${allowedTypes.join(", ")}`,
+      });
+    }
+
+    // Resolver JID
+    let jid;
+    if (phone.includes("@lid")) {
+      jid = await whatsappService.getJidForSending(phone);
+    } else {
+      const numberId = phone.replace(/\D/g, "");
+      if (numberId.length < 10 || numberId.length > 15) {
+        return res.status(400).json({
+          success: false,
+          message: "El formato del número de teléfono no es válido",
+        });
+      }
+      jid = await whatsappService.getJidForSending(numberId);
+    }
+
+    if (!jid) {
+      return res.status(404).json({
+        success: false,
+        message: "El número no está registrado en WhatsApp",
+      });
+    }
+
+    // Procesar el media
+    const { buffer, mimetype: detectedMimetype } = await processMedia(media);
+    if (!buffer) {
+      return res.status(400).json({
+        success: false,
+        message: "No se pudo procesar el archivo de media",
+      });
+    }
+
+    const finalMimetype = customMimetype || detectedMimetype;
+
+    // Enviar según el tipo
+    let result;
+    switch (type) {
+      case "image":
+        result = await whatsappService.sendImage(
+          jid,
+          buffer,
+          caption || "",
+          finalMimetype,
+        );
+        break;
+      case "audio":
+        result = await whatsappService.sendAudio(
+          jid,
+          buffer,
+          finalMimetype || "audio/mpeg; codecs=opus",
+        );
+        break;
+      case "video":
+        result = await whatsappService.sendVideo(
+          jid,
+          buffer,
+          caption || "",
+          finalMimetype || "video/mp4",
+        );
+        break;
+      case "document":
+        result = await whatsappService.sendDocument(
+          jid,
+          buffer,
+          filename || "archivo",
+          finalMimetype || "application/pdf",
+        );
+        break;
+      case "sticker":
+        result = await whatsappService.sendSticker(
+          jid,
+          buffer,
+          finalMimetype || "image/webp",
+        );
+        break;
+    }
+
+    logger.info("Media enviado correctamente", { phone, type, jid });
+    res.json(result);
+  } catch (error) {
+    logger.error("Error al enviar media", { error: error.message });
+    res.status(500).json({
+      success: false,
+      message: "Error al enviar el archivo: " + error.message,
+    });
+  }
+}
